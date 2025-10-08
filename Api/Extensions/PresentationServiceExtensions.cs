@@ -50,19 +50,15 @@ namespace AS.NotificationService.API.Extensions
             services.AddHealthChecks()
                 .AddCheck("self", () => HealthCheckResult.Healthy("AuthService is running"));
 
-            // COMENTAR TODO ESTO TEMPORALMENTE:
-            // .AddDbContextCheck<AuthenticationDbContext>("database")
-            // .AddCheck("jwt-configuration", ...)
-            // .AddCheck("google-oauth", ...)
-            // .AddCheck("memory", ...)
 
             Console.WriteLine("Adding basic services...");
             services.AddControllers();
+
             services.AddEndpointsApiExplorer();
             services.AddSwaggerGen();
 
             // COMENTAR CORS TEMPORALMENTE
-            // Console.WriteLine("Adding CORS...");
+
             Console.WriteLine("Adding CORS...");
             services.AddCors(options =>
             {

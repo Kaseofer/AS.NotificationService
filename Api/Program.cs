@@ -3,10 +3,7 @@
 // ============================================
 using AS.NotificationService.API.Extensions;
 using AS.NotificationService.Application.Extensions;
-using AS.NotificationService.Infrastructure.Email.Settings;
 using AS.NotificationService.Infrastructure.Extensions;
-using AS.NotificationService.Infrastructure.Messaging.Settings;
-using Microsoft.Extensions.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 
