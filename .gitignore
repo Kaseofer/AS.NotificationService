@@ -1,0 +1,37 @@
+# Angular
+/node_modules/
+/dist/
+/tmp/
+/out-tsc/
+/coverage/
+*.log
+*.tmp
+*.swp
+.env
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.pdb
+*.mdb
+*.log
+*.vspscc
+*.vssscc
+*.dbmdl
+*.jfm
+*.aps
+*.ncb
+*.opendb
+*.VC.db
+*.vscode/
+*.vs/
+*.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
