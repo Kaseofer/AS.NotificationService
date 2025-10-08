@@ -1,0 +1,23 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "8080:80" # Railway expondrá este puerto
+    depends_on:
+      - db
+    environment:
+      - ConnectionStrings__DefaultConnection=Host=localhost;Database=postino_audit;Username=postgres;Password=postgres;
+
+  db:
+    image: postgres:17
+    container_name: postgres17
+    restart: always
+    environment:
+      POSTGRES_DB: postino_audit
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
