@@ -1,5 +1,5 @@
-﻿using Application.Dtos;
-using Application.Interface;
+﻿using AS.NotificationService.Application.Service.Interface;
+using AS.NotificationService.Domain.Models;
 using AS.NotificationService.Infrastructure.Email.Settings;
 using AS.NotificationService.Persistence.Interface;
 using Microsoft.Extensions.Options;
@@ -22,7 +22,7 @@ namespace AS.NotificationService.Infrastructure.Email
         }
 
         // VERSIÓN CON MAILEROO API (sin SMTP) + DEBUG Y VALIDACIONES
-        public async Task<bool> SendAsync(EmailRequestDto request)
+        public async Task<bool> SendAsync(EmailRequest request)
         {
             try
             {

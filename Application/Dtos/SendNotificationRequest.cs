@@ -1,8 +1,13 @@
-﻿namespace AS.NotificationService.Domain.Events
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace AS.NotificationService.Application.Dtos
 {
-    public class NotificationEvent
+    public class SendNotificationRequest
     {
-        public Guid NotificationId { get; set; }
         public string Type { get; set; } // "email" o "whatsapp"
         public string To { get; set; }
         public string Subject { get; set; }
@@ -10,8 +15,5 @@
         public string TextBody { get; set; }
         public string From { get; set; }
         public string ReplyTo { get; set; }
-        public Dictionary<string, string> Headers { get; set; }
-        public Dictionary<string, string> Metadata { get; set; }
-        public DateTime CreatedAt { get; set; }
     }
 }

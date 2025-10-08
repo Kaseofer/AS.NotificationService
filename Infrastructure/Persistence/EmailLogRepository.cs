@@ -1,4 +1,5 @@
 ﻿using AS.NotificationService.Persistence.Interface;
+using Microsoft.Extensions.Configuration;
 using Npgsql;
 using System.Net.Mail;
 using System.Text.Json;

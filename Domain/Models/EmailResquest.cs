@@ -1,9 +1,7 @@
-﻿namespace AS.NotificationService.Domain.Events
+﻿namespace AS.NotificationService.Domain.Models
 {
-    public class NotificationEvent
+    public class EmailRequest
     {
-        public Guid NotificationId { get; set; }
-        public string Type { get; set; } // "email" o "whatsapp"
         public string To { get; set; }
         public string Subject { get; set; }
         public string HtmlBody { get; set; }
@@ -11,7 +9,6 @@
         public string From { get; set; }
         public string ReplyTo { get; set; }
         public Dictionary<string, string> Headers { get; set; }
-        public Dictionary<string, string> Metadata { get; set; }
-        public DateTime CreatedAt { get; set; }
+        public string MessageId { get; set; }
     }
 }

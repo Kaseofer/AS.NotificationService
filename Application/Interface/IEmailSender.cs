@@ -1,12 +1,11 @@
-﻿using Application.Dtos;
-using AS.NotificationService.Models;
+﻿using AS.NotificationService.Domain.Models;
 
-namespace Application.Interface
+namespace AS.NotificationService.Application.Service.Interface
 {
+    
+
     public interface IEmailSender
     {
-        Task<bool> SendAsync(EmailRequestDto request);
-
-      
+        Task<bool> SendAsync(EmailRequest request);
     }
 }

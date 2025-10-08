@@ -1,5 +1,5 @@
-﻿using AS.NotificationService.Models;
-using AS.NotificationService.Service.Interface;
+﻿using AS.NotificationService.Application.Service.Interface;
+using AS.NotificationService.Domain.Models;
 using Microsoft.AspNetCore.Mvc;
 
 [ApiController]
@@ -16,7 +16,7 @@ public class DiagnosticsController : ControllerBase
     [HttpGet("ping-smtp")]
     public async Task<IActionResult> PingSmtp()
     {
-        var testEmail = new EmailRequestDto
+        var testEmail = new EmailRequest
         {
             To = "kaseofer@gmail.com", // Cambiá esto por tu correo real
             Subject = "🔧 Test SMTP desde Railway",

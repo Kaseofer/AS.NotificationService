@@ -1,108 +1,143 @@
 ﻿
-
-using AS.NotificationService.Infrastructure.Logger;
-using AS.NotificationService.Infrastructure.Messaging.Settings;
-using AS.NotificationService.Models;
-using AS.NotificationService.Service.Interface;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
-using System.Text;
-using System.Text.Json;
-
-namespace AS.NotificationService.Infrastructure.Queue.Consumer
+// ============================================
+// Infrastructure/Messaging/Consumers/NotificationQueueConsumer.cs
+// ============================================
+namespace AS.NotificationService.Infrastructure.Messaging.Consumers
 {
+    using AS.NotificationService.Domain.Events;
+    using AS.NotificationService.Infrastructure.Messaging.Handlers;
+    using AS.NotificationService.Infrastructure.Messaging.Settings;
+    using Microsoft.Extensions.DependencyInjection;
+    using Microsoft.Extensions.Hosting;
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Options;
+    using RabbitMQ.Client;
+    using RabbitMQ.Client.Events;
+
+    using System.Text;
+    using System.Text.Json;
+
     public class NotificationQueueConsumer : BackgroundService
     {
-        private IConnection _connection;
+        private readonly IConnection _connection;
+        private readonly IModel _channel;
+        private readonly string _queueName;
         private readonly IServiceProvider _serviceProvider;
-        private IChannel _channel;
-
         private readonly ILogger<NotificationQueueConsumer> _logger;
-        private readonly RabbitMQSettings _settings;
 
-        public NotificationQueueConsumer(ILogger<NotificationQueueConsumer> logger, IServiceProvider serviceProvider, IOptions<RabbitMqSettings> options)
+        public NotificationQueueConsumer(
+            IServiceProvider serviceProvider,
+            IOptions<RabbitMQSettings> settings,
+            ILogger<NotificationQueueConsumer> logger)
         {
-
             _serviceProvider = serviceProvider;
             _logger = logger;
-            _settings = options.Value;
 
-
-        }
-
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        {
-            var factory = new ConnectionFactory { Uri = new Uri(_settings.Uri) };
-            _connection = await factory.CreateConnectionAsync(stoppingToken);
-            _channel = await _connection.CreateChannelAsync(null, stoppingToken);
-
-            await _channel.QueueDeclareAsync(
-                queue: _settings.QueueName,
-                durable: _settings.Durable,
-                exclusive: _settings.Exclusive,
-                autoDelete: _settings.AutoDelete,
-                arguments: null
-            );
-
-            var consumer = new AsyncEventingBasicConsumer(_channel);
-            consumer.ReceivedAsync += async (model, ea) => await HandleMessageAsync(ea, stoppingToken);
-
-            await _channel.BasicConsumeAsync(
-                queue: _settings.QueueName,
-                autoAck: false,
-                consumer: consumer
-            );
-
-            while (!stoppingToken.IsCancellationRequested)
-                await Task.Delay(1000, stoppingToken);
-        }
-
-        private async Task HandleMessageAsync(BasicDeliverEventArgs ea, CancellationToken token)
-        {
-            if (token.IsCancellationRequested)
-                return;
-
-            var body = ea.Body.ToArray();
-            var message = Encoding.UTF8.GetString(body);
-
-            if (string.IsNullOrWhiteSpace(message))
-            {
-                Console.WriteLine("⚠️ Mensaje vacío. Se descarta.");
-                await _channel.BasicNackAsync(ea.DeliveryTag, false, false);
-                return;
-            }
+            var config = settings.Value;
+            _queueName = config.QueueName;
 
             try
             {
-                var request = JsonSerializer.Deserialize<EmailRequestDto>(message);
-                request!.MessageId = ea.BasicProperties?.MessageId ?? Guid.NewGuid().ToString();
-
-                if (string.IsNullOrWhiteSpace(request.To))
+                var factory = new ConnectionFactory
                 {
-                    Console.WriteLine($"⚠️ Campo 'To' vacío en {request.MessageId}. Se descarta.");
-                    await _channel.BasicNackAsync(ea.DeliveryTag, false, false);
-                    return;
-                }
+                    HostName = config.HostName,
+                    Port = config.Port,
+                    UserName = config.UserName,
+                    Password = config.Password,
+                    DispatchConsumersAsync = true,
+                    AutomaticRecoveryEnabled = true,
+                    NetworkRecoveryInterval = TimeSpan.FromSeconds(10)
+                };
 
-                using var scope = _serviceProvider.CreateScope();
-                var emailSender = scope.ServiceProvider.GetRequiredService<IEmailSender>();
+                _connection = factory.CreateConnection();
+                _channel = _connection.CreateModel();
 
-                Console.WriteLine($"📥 Procesando email a {request.To} con ID: {request.MessageId}");
-                await emailSender.SendAsync(request);
+                // Configurar prefetch - procesar 1 mensaje a la vez
+                _channel.BasicQos(prefetchSize: 0, prefetchCount: 1, global: false);
 
-                await _channel.BasicAckAsync(ea.DeliveryTag, false);
+                _logger.LogInformation($"🔌 Connected to RabbitMQ - Queue: {_queueName}");
             }
             catch (Exception ex)
             {
-                var isRecoverable = !(ex is JsonException);
-                Console.WriteLine($"❌ Error en {ea.BasicProperties?.MessageId}: {ex.Message} | Requeue: {isRecoverable}");
-                await _channel.BasicNackAsync(ea.DeliveryTag, false, requeue: isRecoverable);
+                _logger.LogError(ex, "❌ Failed to connect to RabbitMQ");
+                throw;
             }
         }
 
+        protected override Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            stoppingToken.ThrowIfCancellationRequested();
+
+            var consumer = new AsyncEventingBasicConsumer(_channel);
+
+            consumer.Received += async (model, ea) =>
+            {
+                var body = ea.Body.ToArray();
+                var message = Encoding.UTF8.GetString(body);
+                var routingKey = ea.RoutingKey;
+
+                _logger.LogInformation($"📨 Message received - RoutingKey: {routingKey}");
+
+                try
+                {
+                    // Deserializar el evento
+                    var notification = JsonSerializer.Deserialize<NotificationEvent>(message, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    });
+
+                    if (notification == null)
+                    {
+                        _logger.LogError("Failed to deserialize notification");
+                        _channel.BasicNack(ea.DeliveryTag, false, false);
+                        return;
+                    }
+
+                    // Procesar el mensaje
+                    await ProcessNotification(notification);
+
+                    // ACK - Confirmar procesamiento exitoso
+                    _channel.BasicAck(ea.DeliveryTag, false);
+                    _logger.LogInformation($"✅ Message processed successfully - NotificationId: {notification.NotificationId}");
+                }
+                catch (JsonException jsonEx)
+                {
+                    _logger.LogError(jsonEx, "❌ JSON deserialization error");
+                    // No requeue si hay error de deserialización
+                    _channel.BasicNack(ea.DeliveryTag, false, false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "❌ Error processing message");
+                    // NACK - Rechazar y NO reencolar (ir a DLX si está configurado)
+                    _channel.BasicNack(ea.DeliveryTag, false, false);
+                }
+            };
+
+            _channel.BasicConsume(
+                queue: _queueName,
+                autoAck: false, // Manual ACK
+                consumer: consumer
+            );
+
+            _logger.LogInformation($"✅ Started consuming from queue: {_queueName}");
+
+            return Task.CompletedTask;
+        }
+
+        private async Task ProcessNotification(NotificationEvent notification)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<NotificationEventHandler>();
+            await handler.HandleAsync(notification);
+        }
+
+        public override void Dispose()
+        {
+            _logger.LogInformation("Disposing NotificationQueueConsumer");
+            _channel?.Close();
+            _connection?.Close();
+            base.Dispose();
+        }
     }
 }
-
