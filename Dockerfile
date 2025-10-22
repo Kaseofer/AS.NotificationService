@@ -15,7 +15,7 @@ COPY ["Domain/*.csproj", "Domain/"]
 COPY ["Infrastructure/*.csproj", "Infrastructure/"]
 
 # Restore de dependencias
-RUN dotnet restore "Api/Api.csproj"
+RUN dotnet restore "Api/Api.csproj" --disable-parallel --no-cache
 
 # Copia todo el código fuente
 COPY . .

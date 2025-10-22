@@ -12,7 +12,7 @@ namespace Postino.EmailService.Persistence
        public EmailLogRepository(IConfiguration configuration) 
         {
 
-            _connectionString = configuration.GetConnectionString("AuditDb")!;
+            _connectionString = configuration.GetConnectionString("DefaultConnection")!;
         }
 
         public async Task LogAsync(string entityId, string eventType, string to, object payload)
