@@ -36,3 +36,4 @@ Thumbs.db
 .idea/
 *.code-workspace
 /Api/appsettings.Development.json
+**/appsettings.Development.json
