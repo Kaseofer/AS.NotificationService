@@ -30,6 +30,7 @@ obj/
 *.vs/
 *.DS_Store
 Thumbs.db
+appsettings.*.json
 
 # IDEs
 .vscode/
