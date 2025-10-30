@@ -1,209 +1,431 @@
 ﻿using AS.NotificationService.Application.Service.Interface;
+using AS.NotificationService.Domain.Entities;
 using AS.NotificationService.Domain.Models;
+using AS.NotificationService.Domain.Repositories;
 using AS.NotificationService.Infrastructure.Email.Settings;
-using AS.NotificationService.Persistence.Interface;
 using Microsoft.Extensions.Options;
 using System.Text;
 using System.Text.Json;
 
-namespace AS.NotificationService.Infrastructure.Email
+namespace AS.NotificationService.Infrastructure.Email;
+
+public class EmailSender : IEmailSender
 {
-    public class EmailSender : IEmailSender
+    protected readonly EmailSettings _settings;
+    protected readonly INotificationLogRepository _notificationRepository; // ← MongoDB
+    private readonly HttpClient _httpClient;
+
+    public EmailSender(
+        IOptions<EmailSettings> options,
+        INotificationLogRepository notificationRepository, // ← Cambio aquí
+        HttpClient httpClient)
     {
-        protected readonly EmailSettings _settings;
-        protected readonly IEmailLogRepository _emailRepository;
-        private readonly HttpClient _httpClient;
+        _settings = options.Value;
+        _notificationRepository = notificationRepository;
+        _httpClient = httpClient;
+    }
 
-        public EmailSender(IOptions<EmailSettings> options, IEmailLogRepository repo, HttpClient httpClient)
+    // ============================================
+    // MÉTODO PRINCIPAL - SendAsync
+    // ============================================
+    public async Task<bool> SendAsync(EmailRequest request)
+    {
+        var notificationLog = new NotificationLog
         {
-            _settings = options.Value;
-            _emailRepository = repo;
-            _httpClient = httpClient;
-        }
+            NotificationType = NotificationType.Email,
+            Recipient = request.To ?? "unknown",
+            Subject = request.Subject ?? "Sin asunto",
+            Message = request.HtmlBody ?? request.TextBody ?? "",
+            Metadata = new Dictionary<string, string>
+            {
+                ["MessageId"] = request.MessageId ?? Guid.NewGuid().ToString(),
+                ["From"] = request.From ?? _settings.SenderEmail
+            }
+        };
 
-        // VERSIÓN CON MAILEROO API (sin SMTP) + DEBUG Y VALIDACIONES
-        public async Task<bool> SendAsync(EmailRequest request)
+        try
         {
-            try
+            // DEBUG
+            Console.WriteLine($"📝 Subject: '{request.Subject}'");
+            Console.WriteLine($"📝 To: '{request.To}'");
+            Console.WriteLine($"📝 MessageId: '{request.MessageId}'");
+
+            // VALIDACIONES
+            if (string.IsNullOrEmpty(request.Subject))
             {
-                // DEBUG: Verificar qué datos están llegando
-                Console.WriteLine($"📝 Subject recibido: '{request.Subject}'");
-                Console.WriteLine($"📝 To recibido: '{request.To}'");
-                Console.WriteLine($"📝 From recibido: '{request.From}'");
-                Console.WriteLine($"📝 HtmlBody: '{request.HtmlBody}'");
-                Console.WriteLine($"📝 TextBody: '{request.TextBody}'");
-                Console.WriteLine($"📝 MessageId: '{request.MessageId}'");
-                Console.WriteLine($"📝 ReplyTo: '{request.ReplyTo}'");
-                Console.WriteLine($"📝 Headers count: {request.Headers?.Count ?? 0}");
-
-                // VALIDACIONES
-                if (string.IsNullOrEmpty(request.Subject))
-                {
-                    Console.WriteLine("❌ Subject está vacío, usando subject por defecto");
-                    request.Subject = "Notificación AgendaSalud";
-                }
-
-                if (string.IsNullOrEmpty(request.To))
-                {
-                    Console.WriteLine("❌ Destinatario está vacío");
-                    return false;
-                }
-
-                if (string.IsNullOrEmpty(request.HtmlBody) && string.IsNullOrEmpty(request.TextBody))
-                {
-                    Console.WriteLine("❌ Tanto HtmlBody como TextBody están vacíos");
-                    return false;
-                }
-
-                // Payload CORRECTO según documentación oficial de Maileroo
-                var payload = new
-                {
-                    from = new
-                    {
-                        address = _settings.SenderEmail,
-                        display_name = "AgendaSalud Notificaciones"
-                    },
-                    to = new[]
-                    {
-                        new
-                        {
-                            address = request.To
-                        }
-                    },
-                    subject = request.Subject ?? "Sin asunto",
-                    html = request.HtmlBody,
-                    plain = request.TextBody ?? request.HtmlBody ?? "Contenido no disponible",
-                    tracking = true
-                };
-
-                var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = true, // Para mejor lectura en logs
-                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping // No escapar caracteres especiales
-                });
-
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-                // Limpiar headers previos y agregar autenticación
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("X-API-Key", _settings.SenderPassword);
-
-                // LOGGING DETALLADO
-                Console.WriteLine($"🔄 Enviando email via API...");
-                Console.WriteLine($"📧 Endpoint: https://smtp.maileroo.com/api/v2/emails");
-                Console.WriteLine($"🔐 De: {_settings.SenderEmail}");
-                Console.WriteLine($"📬 Para: {request.To}");
-                Console.WriteLine($"📋 Subject final: '{payload.subject}'");
-                Console.WriteLine($"🔑 API Key (primeros 8 chars): {_settings.SenderPassword.Substring(0, 8)}...");
-                Console.WriteLine($"📄 Payload completo:");
-                Console.WriteLine(json);
-
-                // Enviar via API - ENDPOINT CORRECTO
-                var response = await _httpClient.PostAsync("https://smtp.maileroo.com/api/v2/emails", content);
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                Console.WriteLine($"📋 HTTP Status: {response.StatusCode}");
-                Console.WriteLine($"📄 Response Body: {responseBody}");
-
-                if (response.IsSuccessStatusCode)
-                {
-                    Console.WriteLine("✅ Correo enviado correctamente via API.");
-
-                    // Log exitoso con información de la respuesta
-                    var successInfo = new
-                    {
-                        Method = "API",
-                        StatusCode = response.StatusCode.ToString(),
-                        Response = responseBody,
-                        Timestamp = DateTime.UtcNow,
-                        Subject = request.Subject,
-                        Recipient = request.To
-                    };
-
-                    await _emailRepository.LogAsync(request.MessageId, "Envio Exitoso (API)", request.To, successInfo);
-                    return true;
-                }
-                else
-                {
-                    Console.WriteLine($"❌ Error API: {response.StatusCode} - {response.ReasonPhrase}");
-
-                    var errorInfo = new
-                    {
-                        Method = "API",
-                        StatusCode = response.StatusCode.ToString(),
-                        Response = responseBody,
-                        ReasonPhrase = response.ReasonPhrase,
-                        Timestamp = DateTime.UtcNow,
-                        Subject = request.Subject,
-                        Recipient = request.To
-                    };
-
-                    await _emailRepository.LogAsync(request.MessageId, $"Error API: {response.StatusCode} - {response.ReasonPhrase}", request.To, errorInfo);
-                    return false;
-                }
+                Console.WriteLine("⚠️ Subject vacío, usando predeterminado");
+                request.Subject = "Notificación AgendaSalud";
             }
-            catch (HttpRequestException httpEx)
+
+            if (string.IsNullOrEmpty(request.To))
             {
-                Console.WriteLine($"❌ Error HTTP: {httpEx.Message}");
-                Console.WriteLine($"🔍 Inner Exception: {httpEx.InnerException?.Message}");
-
-                var errorInfo = new
-                {
-                    Type = "HttpRequestException",
-                    Message = httpEx.Message,
-                    InnerMessage = httpEx.InnerException?.Message ?? "N/A",
-                    Timestamp = DateTime.UtcNow
-                };
-
-                await _emailRepository.LogAsync(request.MessageId, "Error HTTP", request.To, errorInfo);
+                Console.WriteLine("❌ Destinatario vacío");
+                notificationLog.IsSuccess = false;
+                notificationLog.ErrorMessage = "Destinatario vacío";
+                await _notificationRepository.CreateAsync(notificationLog);
                 return false;
             }
-            catch (TaskCanceledException tcEx) when (tcEx.InnerException is TimeoutException)
+
+            if (string.IsNullOrEmpty(request.HtmlBody) && string.IsNullOrEmpty(request.TextBody))
             {
-                Console.WriteLine($"❌ Timeout al enviar email: {tcEx.Message}");
-
-                var errorInfo = new
-                {
-                    Type = "TimeoutException",
-                    Message = "La solicitud tardó demasiado tiempo",
-                    Timestamp = DateTime.UtcNow
-                };
-
-                await _emailRepository.LogAsync(request.MessageId, "Timeout", request.To, errorInfo);
+                Console.WriteLine("❌ Body vacío");
+                notificationLog.IsSuccess = false;
+                notificationLog.ErrorMessage = "Contenido del email vacío";
+                await _notificationRepository.CreateAsync(notificationLog);
                 return false;
             }
-            catch (JsonException jsonEx)
+
+            // Payload para Maileroo
+            var payload = new
             {
-                Console.WriteLine($"❌ Error de serialización JSON: {jsonEx.Message}");
-
-                var errorInfo = new
+                from = new
                 {
-                    Type = "JsonException",
-                    Message = jsonEx.Message,
-                    Timestamp = DateTime.UtcNow
-                };
+                    address = _settings.SenderEmail,
+                    display_name = _settings.SenderName ?? "AgendaSalud Notificaciones"
+                },
+                to = new[] { new { address = request.To } },
+                subject = request.Subject,
+                html = request.HtmlBody,
+                plain = request.TextBody ?? request.HtmlBody,
+                tracking = true
+            };
 
-                await _emailRepository.LogAsync(request.MessageId, "Error JSON", request.To, errorInfo);
+            var success = await SendToMailerooAsync(payload, notificationLog);
+            return success;
+        }
+        catch (Exception ex)
+        {
+            return await HandleException(ex, notificationLog);
+        }
+    }
+
+    // ============================================
+    // MÉTODO SIMPLE - Un destinatario
+    // ============================================
+    public async Task<bool> SendEmailAsync(
+        string to,
+        string subject,
+        string body,
+        bool isHtml = true)
+    {
+        Console.WriteLine($"📧 SendEmailAsync - To: {to}, Subject: {subject}");
+
+        var request = new EmailRequest
+        {
+            MessageId = Guid.NewGuid().ToString(),
+            To = to,
+            From = _settings.SenderEmail,
+            Subject = subject,
+            HtmlBody = isHtml ? body : null,
+            TextBody = isHtml ? null : body
+        };
+
+        return await SendAsync(request);
+    }
+
+    // ============================================
+    // MÉTODO MÚLTIPLES DESTINATARIOS
+    // ============================================
+    public async Task<bool> SendEmailAsync(
+        IEnumerable<string> toList,
+        string subject,
+        string body,
+        bool isHtml = true)
+    {
+        Console.WriteLine($"📧 SendEmailAsync - Múltiples: {toList.Count()}");
+
+        var notificationLog = new NotificationLog
+        {
+            NotificationType = NotificationType.Email,
+            Recipient = string.Join(", ", toList),
+            Subject = subject ?? "Notificación AgendaSalud",
+            Message = body ?? "",
+            Metadata = new Dictionary<string, string>
+            {
+                ["MessageId"] = Guid.NewGuid().ToString(),
+                ["RecipientsCount"] = toList.Count().ToString()
+            }
+        };
+
+        try
+        {
+            if (!toList.Any())
+            {
+                Console.WriteLine("❌ Lista vacía");
+                notificationLog.IsSuccess = false;
+                notificationLog.ErrorMessage = "Lista de destinatarios vacía";
+                await _notificationRepository.CreateAsync(notificationLog);
                 return false;
             }
-            catch (Exception ex)
+
+            var recipients = toList.Select(email => new { address = email }).ToArray();
+
+            var payload = new
             {
-                Console.WriteLine($"❌ Error general: {ex.Message}");
-                Console.WriteLine($"🔍 Tipo: {ex.GetType().Name}");
-                Console.WriteLine($"🔍 Stack Trace: {ex.StackTrace}");
-
-                var errorInfo = new
+                from = new
                 {
-                    Type = ex.GetType().Name,
-                    Message = ex.Message,
-                    Source = ex.Source ?? "N/A",
-                    Timestamp = DateTime.UtcNow
-                };
+                    address = _settings.SenderEmail,
+                    display_name = _settings.SenderName ?? "AgendaSalud Notificaciones"
+                },
+                to = recipients,
+                subject = subject ?? "Notificación AgendaSalud",
+                html = isHtml ? body : null,
+                plain = isHtml ? null : body,
+                tracking = true
+            };
 
-                await _emailRepository.LogAsync(request.MessageId, "Error General", request.To, errorInfo);
+            return await SendToMailerooAsync(payload, notificationLog);
+        }
+        catch (Exception ex)
+        {
+            return await HandleException(ex, notificationLog);
+        }
+    }
+
+    // ============================================
+    // MÉTODO CON CC Y BCC
+    // ============================================
+    public async Task<bool> SendEmailAsync(
+        string to,
+        string subject,
+        string body,
+        IEnumerable<string>? ccList = null,
+        IEnumerable<string>? bccList = null,
+        bool isHtml = true)
+    {
+        Console.WriteLine($"📧 SendEmailAsync con CC/BCC - To: {to}");
+
+        var allRecipients = to;
+        if (ccList != null && ccList.Any())
+            allRecipients += $", CC: {string.Join(", ", ccList)}";
+        if (bccList != null && bccList.Any())
+            allRecipients += $", BCC: {string.Join(", ", bccList)}";
+
+        var notificationLog = new NotificationLog
+        {
+            NotificationType = NotificationType.Email,
+            Recipient = allRecipients,
+            Subject = subject ?? "Notificación AgendaSalud",
+            Message = body ?? "",
+            Metadata = new Dictionary<string, string>
+            {
+                ["MessageId"] = Guid.NewGuid().ToString(),
+                ["HasCC"] = (ccList?.Any() ?? false).ToString(),
+                ["HasBCC"] = (bccList?.Any() ?? false).ToString()
+            }
+        };
+
+        try
+        {
+            var payload = new Dictionary<string, object>
+            {
+                ["from"] = new
+                {
+                    address = _settings.SenderEmail,
+                    display_name = _settings.SenderName ?? "AgendaSalud Notificaciones"
+                },
+                ["to"] = new[] { new { address = to } },
+                ["subject"] = subject ?? "Notificación AgendaSalud",
+                ["tracking"] = true
+            };
+
+            if (isHtml)
+                payload["html"] = body;
+            else
+                payload["plain"] = body;
+
+            if (ccList != null && ccList.Any())
+                payload["cc"] = ccList.Select(e => new { address = e }).ToArray();
+
+            if (bccList != null && bccList.Any())
+                payload["bcc"] = bccList.Select(e => new { address = e }).ToArray();
+
+            return await SendToMailerooAsync(payload, notificationLog);
+        }
+        catch (Exception ex)
+        {
+            return await HandleException(ex, notificationLog);
+        }
+    }
+
+    // ============================================
+    // MÉTODO CON ADJUNTO
+    // ============================================
+    public async Task<bool> SendEmailWithAttachmentAsync(
+        string to,
+        string subject,
+        string body,
+        string attachmentPath,
+        string? attachmentName = null,
+        bool isHtml = true)
+    {
+        Console.WriteLine($"📧 Email con adjunto - To: {to}, File: {attachmentPath}");
+
+        var notificationLog = new NotificationLog
+        {
+            NotificationType = NotificationType.Email,
+            Recipient = to,
+            Subject = subject ?? "Notificación AgendaSalud",
+            Message = body ?? "",
+            Metadata = new Dictionary<string, string>
+            {
+                ["MessageId"] = Guid.NewGuid().ToString(),
+                ["HasAttachment"] = "true",
+                ["AttachmentPath"] = attachmentPath
+            }
+        };
+
+        try
+        {
+            if (!File.Exists(attachmentPath))
+            {
+                Console.WriteLine($"❌ Archivo no encontrado: {attachmentPath}");
+                notificationLog.IsSuccess = false;
+                notificationLog.ErrorMessage = $"Archivo no encontrado: {attachmentPath}";
+                await _notificationRepository.CreateAsync(notificationLog);
+                return false;
+            }
+
+            var fileBytes = await File.ReadAllBytesAsync(attachmentPath);
+            var base64Content = Convert.ToBase64String(fileBytes);
+            var fileName = attachmentName ?? Path.GetFileName(attachmentPath);
+            var mimeType = GetMimeType(attachmentPath);
+
+            Console.WriteLine($"📎 Adjunto: {fileName} ({fileBytes.Length} bytes)");
+
+            var payload = new
+            {
+                from = new
+                {
+                    address = _settings.SenderEmail,
+                    display_name = _settings.SenderName ?? "AgendaSalud Notificaciones"
+                },
+                to = new[] { new { address = to } },
+                subject = subject ?? "Notificación AgendaSalud",
+                html = isHtml ? body : null,
+                plain = isHtml ? null : body,
+                tracking = true,
+                attachments = new[]
+                {
+                    new
+                    {
+                        filename = fileName,
+                        content = base64Content,
+                        content_type = mimeType,
+                        encoding = "base64"
+                    }
+                }
+            };
+
+            return await SendToMailerooAsync(payload, notificationLog);
+        }
+        catch (Exception ex)
+        {
+            return await HandleException(ex, notificationLog);
+        }
+    }
+
+    // ============================================
+    // MÉTODOS PRIVADOS
+    // ============================================
+
+    private async Task<bool> SendToMailerooAsync(
+        object payload,
+        NotificationLog notificationLog)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            });
+
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Add("X-API-Key", _settings.SenderPassword);
+
+            Console.WriteLine($"🔄 Enviando email via Maileroo API...");
+            Console.WriteLine($"📧 De: {_settings.SenderEmail}");
+            Console.WriteLine($"📬 Para: {notificationLog.Recipient}");
+            Console.WriteLine($"📋 Subject: '{notificationLog.Subject}'");
+
+            var response = await _httpClient.PostAsync(
+                "https://smtp.maileroo.com/api/v2/emails",
+                content);
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            Console.WriteLine($"📋 Status: {response.StatusCode}");
+            Console.WriteLine($"📄 Response: {responseBody}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine("✅ Email enviado correctamente");
+
+                notificationLog.IsSuccess = true;
+                notificationLog.Metadata ??= new Dictionary<string, string>();
+                notificationLog.Metadata["StatusCode"] = response.StatusCode.ToString();
+                notificationLog.Metadata["Response"] = responseBody;
+
+                await _notificationRepository.CreateAsync(notificationLog);
+                return true;
+            }
+            else
+            {
+                Console.WriteLine($"❌ Error: {response.StatusCode}");
+
+                notificationLog.IsSuccess = false;
+                notificationLog.ErrorMessage = $"{response.StatusCode} - {responseBody}";
+                notificationLog.Metadata ??= new Dictionary<string, string>();
+                notificationLog.Metadata["StatusCode"] = response.StatusCode.ToString();
+                notificationLog.Metadata["Response"] = responseBody;
+
+                await _notificationRepository.CreateAsync(notificationLog);
                 return false;
             }
         }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Error en SendToMailerooAsync: {ex.Message}");
+            throw;
+        }
+    }
+
+    private async Task<bool> HandleException(Exception ex, NotificationLog notificationLog)
+    {
+        Console.WriteLine($"❌ Error: {ex.GetType().Name} - {ex.Message}");
+
+        notificationLog.IsSuccess = false;
+        notificationLog.ErrorMessage = $"{ex.GetType().Name}: {ex.Message}";
+        notificationLog.Metadata ??= new Dictionary<string, string>();
+        notificationLog.Metadata["ExceptionType"] = ex.GetType().Name;
+        notificationLog.Metadata["StackTrace"] = ex.StackTrace ?? "N/A";
+
+        await _notificationRepository.CreateAsync(notificationLog);
+        return false;
+    }
+
+    private string GetMimeType(string filePath)
+    {
+        var extension = Path.GetExtension(filePath).ToLowerInvariant();
+
+        return extension switch
+        {
+            ".pdf" => "application/pdf",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".txt" => "text/plain",
+            ".csv" => "text/csv",
+            ".zip" => "application/zip",
+            _ => "application/octet-stream"
+        };
     }
 }

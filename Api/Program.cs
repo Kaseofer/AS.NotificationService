@@ -15,7 +15,7 @@ builder.Configuration.AddEnvironmentVariables();
 
 // Registro de servicios por capas
 
-builder.Services.AddInfrastructureServices();
+builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddApplicationServices();
 builder.Services.AddPresentationServices(builder.Configuration);
 
